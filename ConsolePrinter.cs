@@ -44,6 +44,14 @@ namespace LoraArduCAMHostApp
                     currentStateString  = "Pinging Camera";
                     backgroundColor = ConsoleColor.Blue;
                 break;
+                case Constants.HostAppState.Trigger:
+                    currentStateString = "Triggering Camera";
+                    backgroundColor = ConsoleColor.Magenta;
+                    break;
+                case Constants.HostAppState.PacketTransfer:
+                    currentStateString = "Transfering Camera Data";
+                    backgroundColor = ConsoleColor.DarkYellow;
+                    break;
                 default:
                     currentStateString = "Connected to Receiver and Waiting For Command!";
                     backgroundColor = ConsoleColor.Green;

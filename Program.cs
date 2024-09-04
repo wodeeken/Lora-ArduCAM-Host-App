@@ -7,6 +7,9 @@ using System.Diagnostics;
 using System.Net;
 using System.Formats.Asn1;
 using System.Timers;
+using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
+using System.ComponentModel;
 namespace LoraArduCAMHostApp
 {
     class Program
@@ -18,11 +21,18 @@ namespace LoraArduCAMHostApp
         private static System.Timers.Timer CameraTimeoutTimer = new System.Timers.Timer(1000);
         private static bool ReceiverConnectTimer_Ticked = false;
         private static string ReceiverSerialResponse = "";
+        private static List<byte> ReceiverSerialResponse_Bytes = new List<byte>();
+        // Image Transfer Variables.
+        private static int TotalImagePacketCount = 0;
+        private static int CurrentImagePacket = 0;
+        private static List<byte> ImageData;
         private static int CameraTimeoutCount = 0;
         public static string ProgressMessage = "";
         private static bool firstRead = true;
         private static SerialPort CurrentSerialPort;
         private static bool ProgramRun = true;
+        private static int MaxDataTransferRetries = 5;
+        private static int CurrentDataTransferRetry = 0;
         private static void ReceiverConnectTimer_ElapsedHandler(object? sender, ElapsedEventArgs e){
             ReceiverConnectTimer.Stop();
             ReceiverConnectTimer_Ticked = true;
@@ -31,6 +41,7 @@ namespace LoraArduCAMHostApp
          
             CameraTimeoutCount++;
         }
+        
         private static void CurrentSerialPort_DataReceived(object sender, SerialDataReceivedEventArgs e){
             try{
                 
@@ -45,10 +56,25 @@ namespace LoraArduCAMHostApp
                         // This was from an attempted connection / or Ping. Save response.
                         ReceiverSerialResponse  = CurrentSerialPort.ReadLine().Trim();
                         CurrentSerialPort.DiscardInBuffer();
+                        break;
+                    case Constants.HostAppState.Trigger:
+                        ReceiverSerialResponse = CurrentSerialPort.ReadLine().Trim();
+                        CurrentSerialPort.DiscardInBuffer();
+                    break;
+                    case Constants.HostAppState.PacketTransfer:
+                        
+                        int bytesToRead = CurrentSerialPort.BytesToRead;
+                        byte[] ReadBuffer = new byte[bytesToRead];
+                        CurrentSerialPort.Read(ReadBuffer, 0, bytesToRead);
+                        foreach(var curByte in ReadBuffer){
+                            ReceiverSerialResponse_Bytes.Add(curByte);
+                        }
+                        // Append response to ReceiverSerialResponse.
+                        ReceiverSerialResponse += System.Text.Encoding.ASCII.GetString(ReadBuffer);
+                        
                     break;
                     
                 }
-                Console.WriteLine(ReceiverSerialResponse);
             }catch(Exception ex){
                 Console.WriteLine("Just got an error thrown WTD.: " + ex.Message);
             }
@@ -103,57 +129,249 @@ namespace LoraArduCAMHostApp
                         ReceiverSerialResponse = "";
                         try{
                             CurrentSerialPort.WriteLine(Constants.Ping_Camera_Command);
-                        CameraTimeoutCount = 0;
-                        CameraTimeoutTimer.Start();
-                        bool CameraPingSuccess = false;
-                        string CameraPingMessage = "";
+                            CameraTimeoutCount = 0;
+                            CameraTimeoutTimer.Start();
+                            bool CameraPingSuccess = false;
+                            string CameraPingMessage = "";
                         
-                        while(CameraTimeoutCount < 10){
-                            
-                            //Console.WriteLine("IM LOOPING!!" + loopCounter.ToString());
-                            Thread.Sleep(200);
-                            if(ReceiverSerialResponse != null && ReceiverSerialResponse.Trim() == ""){
-                                ProgressMessage = "Pinging Camera";
-                                for(int i = 0; i < CameraTimeoutCount; i++)
-                                    ProgressMessage += ".";
-                                printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
-                            }else if(ReceiverSerialResponse != null && ReceiverSerialResponse.Trim() == Constants.Ping_Camera_Response){
-                                CameraPingSuccess = true;
-                                CameraPingMessage = "Camera Ping Successful!";
-                                break;
-                            }else if(ReceiverSerialResponse != null && ReceiverSerialResponse.Trim() == Constants.Ping_Camera_Timeout){
-                                CameraPingMessage = "Ping Timed Out on Receiver Side";
-                                break;
-                            }else if(ReceiverSerialResponse != null){
-                                CameraPingMessage = "Unrecognized response from ping: " + ReceiverSerialResponse;
-                            }else{
-                                ProgressMessage = "Pinging Camera";
-                                for(int i = 0; i < CameraTimeoutCount; i++)
-                                    ProgressMessage += ".";
-                                printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                            while(CameraTimeoutCount < 10){
+                                
+                                Thread.Sleep(200);
+                                if(ReceiverSerialResponse != null && ReceiverSerialResponse.Trim() == ""){
+                                    ProgressMessage = "Pinging Camera";
+                                    for(int i = 0; i < CameraTimeoutCount; i++)
+                                        ProgressMessage += ".";
+                                    printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                                }else if(ReceiverSerialResponse != null && ReceiverSerialResponse.Trim() == Constants.Ping_Camera_Response){
+                                    CameraPingSuccess = true;
+                                    CameraPingMessage = "Camera Ping Successful!";
+                                    break;
+                                }else if(ReceiverSerialResponse != null && ReceiverSerialResponse.Trim() == Constants.Ping_Camera_Timeout){
+                                    CameraPingMessage = "Ping Timed Out on Receiver Side";
+                                    break;
+                                }else if(ReceiverSerialResponse != null){
+                                    CameraPingMessage = "Unrecognized response from ping: " + ReceiverSerialResponse;
+                                }else{
+                                    ProgressMessage = "Pinging Camera";
+                                    for(int i = 0; i < CameraTimeoutCount; i++)
+                                        ProgressMessage += ".";
+                                    printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                                }
                             }
-                        }
-                        CameraTimeoutTimer.Stop();
-                        if(CameraPingMessage == "" && !CameraPingSuccess){
-                            CameraPingMessage = "Ping Timed Out on Host App Side (Camera nor Receiver responded to Ping request)";
-                        }
-                        ProgressMessage = CameraPingMessage;
-                        printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
-                        Thread.Sleep(2000);
-                        CurrentCameraState = Constants.HostAppState.Wait;
-                        }catch(Exception)
-                            {
-                                ProgressMessage = "RECEIVER DISCONNECTED!";
-                                CurrentCameraState = Constants.HostAppState.ReceiverDisconnected;
-                                Thread.Sleep(1000);
+                            CameraTimeoutTimer.Stop();
+                            if(CameraPingMessage == "" && !CameraPingSuccess){
+                                CameraPingMessage = "Ping Timed Out on Host App Side (Camera nor Receiver responded to Ping request)";
                             }
+                            ProgressMessage = CameraPingMessage;
+                            printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                            Thread.Sleep(2000);
+                            CurrentCameraState = Constants.HostAppState.Wait;
+                            }catch(Exception)
+                                {
+                                    ProgressMessage = "RECEIVER DISCONNECTED!";
+                                    CurrentCameraState = Constants.HostAppState.ReceiverDisconnected;
+                                    Thread.Sleep(1000);
+                                }
                         break;
+                    case Constants.HostAppState.Trigger:
+                        ProgressMessage = "Triggering Camera";
+                        printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                        ReceiverSerialResponse = "";
+                        try{
+                            CurrentSerialPort.WriteLine(Constants.Trigger_Camera_Command);
+                            CameraTimeoutCount = 0;
+                            CameraTimeoutTimer.Start();
+                            bool CameraPingSuccess = false;
+                            string CameraPingMessage = "";
+                        
+                            while(CameraTimeoutCount < 10){
+                                // Perform regex on response.
+                                Match responseMatch = Regex.Match(ReceiverSerialResponse, Constants.Trigger_Camera_Response);
+                                Thread.Sleep(200);
+                                if(ReceiverSerialResponse != null && ReceiverSerialResponse.Trim() == ""){
+                                    ProgressMessage = "Triggering Camera";
+                                    for(int i = 0; i < CameraTimeoutCount; i++)
+                                        ProgressMessage += ".";
+                                    printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                                }else if(ReceiverSerialResponse != null && responseMatch.Success){
+                                    // Get the digit.
+                                    Match packetNumberMatch = Regex.Match(ReceiverSerialResponse, "\\d+");
+
+                                    CameraPingSuccess = true;
+                                    CameraPingMessage = $"Camera Trigger Successful! Image will be sent in {packetNumberMatch.Value} packets.";
+                                    TotalImagePacketCount = Int32.Parse(packetNumberMatch.Value);
+                                    CurrentImagePacket = 0;
+                                    ImageData = new List<byte>();
+                                    CurrentCameraState = Constants.HostAppState.PacketTransfer;
+                                    break;
+                                }else if(ReceiverSerialResponse != null && ReceiverSerialResponse.Trim() == Constants.Trigger_Camera_Timeout){
+                                    CameraPingMessage = "Camera Trigger Timed Out on Receiver Side";
+                                    CurrentCameraState = Constants.HostAppState.Wait;
+                                    break;
+                                }else if(ReceiverSerialResponse != null){
+                                    CameraPingMessage = "Unrecognized response from ping: " + ReceiverSerialResponse;
+                                    CurrentCameraState = Constants.HostAppState.Wait;
+                                }else{
+                                    ProgressMessage = "Pinging Camera";
+                                    for(int i = 0; i < CameraTimeoutCount; i++)
+                                        ProgressMessage += ".";
+                                    printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                                }
+                            }
+                            CameraTimeoutTimer.Stop();
+                            if(CameraPingMessage == "" && !CameraPingSuccess){
+                                CameraPingMessage = "Ping Timed Out on Host App Side (Camera nor Receiver responded to Ping request)";
+                                CurrentCameraState = Constants.HostAppState.ReceiverDisconnected;
+                            }
+                            ProgressMessage = CameraPingMessage;
+                            printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                            Thread.Sleep(2000);
+                            }catch(Exception)
+                            {
+                                    ProgressMessage = "RECEIVER DISCONNECTED!";
+                                    CurrentCameraState = Constants.HostAppState.ReceiverDisconnected;
+                                    Thread.Sleep(1000);
+                            }
+                    break;
+                    case Constants.HostAppState.PacketTransfer:
+                        if(CurrentImagePacket >= TotalImagePacketCount){
+                            CurrentCameraState = Constants.HostAppState.ImageComplete;
+                            break;
+                        }
+                        ProgressMessage = "Data Transfer";
+                        printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                        ReceiverSerialResponse = "";
+                        try{
+                            // Send request for current packet number.
+                            CurrentSerialPort.WriteLine(Constants.Data_Transfer_Request.Replace("PACKET_NUM", CurrentImagePacket.ToString()));
+                            CurrentSerialPort.DiscardInBuffer();
+                            CameraTimeoutCount = 0;
+                            CameraTimeoutTimer.Start();
+                            bool CameraPingSuccess = false;
+                            string CameraPingMessage = "";
+                        
+                            while(CameraTimeoutCount < 10){
+                                // Perform regex on response.
+                                Match responseMatch = Regex.Match(ReceiverSerialResponse, Constants.Data_Transfer_Response_Header);
+                                
+                                Thread.Sleep(200);
+                                if(ReceiverSerialResponse != null && ReceiverSerialResponse.Trim() == ""){
+                                    ProgressMessage = $"Attempt {CurrentDataTransferRetry} of {MaxDataTransferRetries} - Waiting on transfer packet { CurrentImagePacket + 1} of { TotalImagePacketCount}";
+                                    for(int i = 0; i < CameraTimeoutCount; i++)
+                                        ProgressMessage += ".";
+                                    printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                                }else if(ReceiverSerialResponse != null && responseMatch.Success){
+                                    // Get the digit.
+                                    Match packetNumberMatch = Regex.Match(ReceiverSerialResponse, "\\d+");
+                                    if(packetNumberMatch.Success){
+                                        int currentPacketNum = Int32.Parse(packetNumberMatch.Value);
+                                        if(currentPacketNum != CurrentImagePacket){
+                                            CameraPingMessage = "Data Transfer Error Occurred - Packet received out of order.";
+                                            CurrentCameraState = Constants.HostAppState.Wait;
+                                        }else{
+                                            // Wait a second to ensure all trailing data is included.
+                                             Thread.Sleep(1000);
+                                            
+                                            // Get the data out.
+                                            string dataAdded = "";
+                                            
+                                            int dataBegin = responseMatch.Index + responseMatch.Length;
+                                            string currentPacketData = "";
+                                           
+                                            for(int i = dataBegin; i < ReceiverSerialResponse_Bytes.Count() && (i  < Constants.ImageDataPacketSize + dataBegin); i++){
+                                                ImageData.Add(ReceiverSerialResponse_Bytes[i]);
+                                                currentPacketData += BitConverter.ToString(new byte[]{ReceiverSerialResponse_Bytes[i]}) + ",";
+                                            }
+                                            
+                                            CameraPingSuccess = true;
+                                            
+                                            CurrentImagePacket++;
+                                            CurrentDataTransferRetry = 0;
+                                            CurrentCameraState = Constants.HostAppState.PacketTransfer;
+                                            ReceiverSerialResponse = "";
+                                            ReceiverSerialResponse_Bytes = new List<byte>();
+                                    }
+                                    }else{
+                                        CameraPingMessage = "Data Transfer Error Occurred.1";
+                                        CurrentCameraState = Constants.HostAppState.Wait;
+                                    break;
+                                    }
+                                    
+                                    break;
+                                }else if(ReceiverSerialResponse != null && ReceiverSerialResponse.Trim() == Constants.Data_Transfer_Error){
+                                    
+                                    CurrentCameraState = Constants.HostAppState.PacketTransfer;
+                                    break;
+                                }else if(ReceiverSerialResponse != null){
+                                    CurrentCameraState = Constants.HostAppState.PacketTransfer;
+                                }else{
+                                    ProgressMessage = "Pinging Camera";
+                                    for(int i = 0; i < CameraTimeoutCount; i++)
+                                        ProgressMessage += ".";
+                                    printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                                }
+                            }
+                            CameraTimeoutTimer.Stop();
+                            if(CameraPingMessage == "" && !CameraPingSuccess){
+                                // Timeout, retry packet request.
+                                CurrentDataTransferRetry++;
+                                if(CurrentDataTransferRetry > MaxDataTransferRetries){
+                                    CurrentDataTransferRetry = 0;
+                                    CameraPingMessage = $"Data Transfer Request Failed for packet {CurrentImagePacket + 1} of {TotalImagePacketCount}. Quitting transfer.";
+                                    CurrentCameraState = Constants.HostAppState.Wait;
+                                }else{
+                                    CameraPingMessage = $"Attempt {CurrentDataTransferRetry - 1} of {MaxDataTransferRetries} Failed - Retrying data request for packet {CurrentImagePacket + 1} of {TotalImagePacketCount}";
+                                    CurrentCameraState = Constants.HostAppState.PacketTransfer;
+                                }
+                                
+                            }
+                            ProgressMessage = CameraPingMessage;
+                            printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                            //Thread.Sleep(2000);
+                            }catch(Exception ex)
+                            {
+                                    ProgressMessage = $"RECEIVER DISCONNECTED! {ex.Message}";
+                                    Console.WriteLine(ReceiverSerialResponse + " - " + ex.Message + " - " + ex.StackTrace);
+                                    CurrentCameraState = Constants.HostAppState.Wait;
+                                    Thread.Sleep(10000);
+                            }
+                    break;
+                    case Constants.HostAppState.ImageComplete:
+                        // Write camera data to file.
+                        
+                        string tempFile = Path.GetTempFileName();
+                        string tempFile_Image = Path.GetTempFileName();
+                        //string tempFile_Bytes = Path.GetTempFileName();
+                        string allImageData = "";
+                        allImageData = BitConverter.ToString(ImageData.ToArray());
+                        //string imageBytes = 
+                        File.WriteAllText(tempFile, allImageData);
+                        List<byte> truncatedBytes = new List<byte>();
+                        // for(int i = 0 ; i < ImageData.Count; i++){
+                        //     truncatedBytes.Add(ImageData.ElementAt(i));
+                        //     if(i > 0 && ImageData.ElementAt(i - 1) == 0xFF && ImageData.ElementAt(i) == 0xD9){
+                        //         break;
+                        //     }
+                        // }
+                        File.WriteAllBytes(tempFile_Image, ImageData.ToArray() );
+                        ProgressMessage = $"Image Completed. Image Byte Data at: {tempFile}, image at {tempFile_Image}";
+                        printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
+                        Console.WriteLine(ProgressMessage );
+                        Thread.Sleep(30000);
+                        CurrentCameraState = Constants.HostAppState.Wait;
+                    break;
                 }
             }   
         }
         static bool FindSerialPort(){
             // go through all /dev/ttyUSBXX ports, from 0 to 99, open, and ping it.
-            string portSyntax = "/dev/ttyUSB<>";
+            string portSyntax;
+            if(System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                portSyntax = Constants.SerialPortFormat_Windows;
+            else if(System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                portSyntax = Constants.SerialPortFormat_Linux; 
+            else
+                throw new NotImplementedException("Only Windows and Linux OS is supported."); 
             int currentPortNum = 0;
             bool shouldContinue = true;
             while(shouldContinue){
@@ -165,6 +383,7 @@ namespace LoraArduCAMHostApp
                     CurrentSerialPort = new SerialPort(portName, 38400, Parity.None, 8,StopBits.One);
                     CurrentSerialPort.NewLine = "\r";
                     CurrentSerialPort.ReadTimeout = 5000;
+                    //CurrentSerialPort.Handshake = Handshake.XOnXOff;
                     CurrentSerialPort.Open();
                     CurrentSerialPort.DiscardInBuffer();
                     CurrentSerialPort.WriteLine(Constants.Receiver_Ping_Command);
@@ -210,28 +429,7 @@ namespace LoraArduCAMHostApp
             }
             
         }
-        // delegate string? ReadLineDelegate();
-        // static string? ReadLine(int timeoutms)
-        // {
-        //     ReadLineDelegate d = Console.In.ReadLine;
-        //     Task<string?> readTask = Task<string?>.Factory.StartNew(()=>d());
-        //     //myReadTask.RunSynchronously();
-        //     bool completed = readTask.Wait(timeoutms);
-        //     //IAsyncResult result = d.BeginInvoke(null, null);
-        //     //bool completed = myReadTask.Wait(timeoutms);
-            
-        //     if (completed)
-        //     {
-        //         string? resultstr = readTask.Result; //"asdfasd";// d.EndInvoke(result);
-        //         //Console.WriteLine("Read: " + resultstr);
-        //         return resultstr;
-        //     }
-        //     else
-        //     {
-        //         //Console.WriteLine("Timed out!");
-        //         return "";
-        //     }
-        // }
+        
         static void ConsoleInput(){
             
             string? input = Console.ReadLine();// ReadLine(5000);//Console.In.ReadToEnd();
@@ -247,7 +445,7 @@ namespace LoraArduCAMHostApp
                                 CurrentCameraState = Constants.HostAppState.PingCamera;
 
                             }else if(input.ToLower() == "t"){
-                                
+                                CurrentCameraState = Constants.HostAppState.Trigger;
                             }
                         }
         }
