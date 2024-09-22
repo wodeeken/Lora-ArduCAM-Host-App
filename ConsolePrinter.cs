@@ -6,8 +6,9 @@ namespace LoraArduCAMHostApp
             Idle,       // Only prints header.
             BlockingProgress   // Prints header with updating body, with menu greyed visibily disabled.  
         }
-        public ConsolePrinter(){
-
+        private string ImageWritePath;
+        public ConsolePrinter(string ImageWritePath){
+            this.ImageWritePath = ImageWritePath;
         }   
         public void PrintState(CurrentConsoleState currentState){
             // If we are in a blocking state, don't print the menu.
@@ -27,7 +28,8 @@ namespace LoraArduCAMHostApp
             Console.BackgroundColor = ConsoleColor.DarkGreen;
             Console.ForegroundColor = ConsoleColor.White;
             Console.WriteLine("Lora ArduCAM Host Application");
-            
+            Console.ForegroundColor = ConsoleColor.Black;
+            Console.WriteLine($"Images written to: {ImageWritePath}");
             PrintMenu(menuEnabled);
             string currentStateString = "";
             ConsoleColor backgroundColor;
