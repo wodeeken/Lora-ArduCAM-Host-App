@@ -365,7 +365,12 @@ namespace LoraArduCAMHostApp
                         // Write camera data to file.
                         
                         
-                        string imageFile = Path.Combine(ImageFolder, DateTime.Now.ToString("yyyy-dd-MM hh:mm:ss") + ".jpg");
+                        string imageFile = "";
+                        // Windows does not allow ':', Linux does.
+                         if(System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                            imageFile = Path.Combine(ImageFolder, DateTime.Now.ToString("yyyy-dd-MM hh_mm_ss") + ".jpg");
+                        else if(System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                            imageFile  = Path.Combine(ImageFolder, DateTime.Now.ToString("yyyy-dd-MM hh:mm:ss") + ".jpg");
                         File.WriteAllBytes(imageFile, ImageData.ToArray() );
                         ProgressMessage = $"Image Transfer Completed. Image at {imageFile}.";
                         printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
