@@ -374,7 +374,6 @@ namespace LoraArduCAMHostApp
                         File.WriteAllBytes(imageFile, ImageData.ToArray() );
                         ProgressMessage = $"Image Transfer Completed. Image at {imageFile}.";
                         printer.PrintState(ConsolePrinter.CurrentConsoleState.BlockingProgress);
-                        Console.WriteLine(ProgressMessage );
                         Thread.Sleep(3000);
                         CurrentCameraState = Constants.HostAppState.Wait;
                     break;
